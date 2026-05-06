@@ -15,9 +15,12 @@ from fastapi import Depends
 
 from app.models import User
 
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 
-SECRET_KEY = "supersecretkey123"   # change later
+SECRET_KEY = os.getenv("SECRET_KEY")  # change later
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 

@@ -87,7 +87,7 @@ const Sidebar = () => {
         </motion.div>
 
         <span className="font-bold text-lg tracking-wide text-white">
-          IPDS AI
+          IPDRS AI
         </span>
 
       </div>
