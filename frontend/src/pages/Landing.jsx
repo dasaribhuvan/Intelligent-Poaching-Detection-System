@@ -73,7 +73,7 @@ const Landing = () => {
 
         <div className="flex items-center gap-2">
           <Shield className="text-emerald-400" size={32} />
-          <span className="text-2xl font-bold tracking-tighter">IPDS</span>
+          <span className="text-2xl font-bold tracking-tighter">IPDRS</span>
         </div>
 
         <div className="space-x-4">
@@ -263,7 +263,7 @@ const Landing = () => {
           <div>
             <div className="flex items-center gap-2 mb-4">
               <Shield className="text-emerald-400" size={24} />
-              <span className="text-xl font-bold">IPDS</span>
+              <span className="text-xl font-bold">IPDRS</span>
             </div>
 
             <p className="text-gray-500 text-sm">
@@ -303,7 +303,7 @@ const Landing = () => {
         </div>
 
         <div className="max-w-7xl mx-auto mt-10 pt-6 border-t border-white/10 text-xs text-gray-600 text-center">
-          © 2026 IPDS Intelligent Poaching Detection System
+          © 2026 IPDRS Intelligent Poaching Detection System
         </div>
 
       </footer>
