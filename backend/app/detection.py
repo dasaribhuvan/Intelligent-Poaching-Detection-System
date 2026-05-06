@@ -1,69 +1,125 @@
 from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.orm import Session
-import random
+from ultralytics import YOLO
 
 from app.auth import get_current_user
 from app.models import User, Incident, IncidentDetection
 from app.database import SessionLocal
-from app.clip_model import classify_person
-from app.blip_model import understand_scene
 from app.email_service import send_alert_email
 from app.pdf_generator import generate_evidence_pdf
 
-import os
-from datetime import datetime
 import cv2
 import numpy as np
+import os
+import torch
+import random
 
-from sahi import AutoDetectionModel
-from sahi.predict import get_sliced_prediction
+from pathlib import Path
+from datetime import datetime
 
 router = APIRouter()
 
-# ---------------- YOLO MODEL ----------------
+# =========================================================
+# FIX FOR PYTORCH 2.6+ (weights_only issue)
+# =========================================================
 
-detection_model = AutoDetectionModel.from_pretrained(
-    model_type="yolov8",
-    model_path="models/best.pt",
-    confidence_threshold=0.15,
-    device="cpu"
-)
+_original_torch_load = torch.load
 
-# ---------------- DATABASE ----------------
+def _patched_torch_load(*args, **kwargs):
+    kwargs["weights_only"] = False
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = _patched_torch_load
+
+# =========================================================
+# PROJECT ROOT
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# =========================================================
+# MODEL PATH RESOLVER
+# =========================================================
+
+def resolve_model_path(model_path="best.pt"):
+
+    # Direct path
+    if os.path.isfile(model_path):
+        return model_path
+
+    # models/ folder
+    model_dir_path = PROJECT_ROOT / "models" / model_path
+
+    if model_dir_path.is_file():
+        return str(model_dir_path)
+
+    # Root folder
+    root_path = PROJECT_ROOT / model_path
+
+    if root_path.is_file():
+        return str(root_path)
+
+    raise FileNotFoundError(
+        f"Model file '{model_path}' not found."
+    )
+
+# =========================================================
+# LOAD YOLO MODEL
+# =========================================================
+
+MODEL_PATH = resolve_model_path("best.pt")
+
+print(f"Loading YOLO model from: {MODEL_PATH}")
+
+model = YOLO(MODEL_PATH)
+
+print("YOLO model loaded successfully")
+print("Detected classes:", model.names)
+
+# =========================================================
+# DATABASE
+# =========================================================
 
 def get_db():
+
     db = SessionLocal()
+
     try:
         yield db
+
     finally:
         db.close()
 
-# ---------------- GPS GENERATOR ----------------
+# =========================================================
+# GPS GENERATOR
+# =========================================================
 
 def generate_location():
+
     lat = 17.68 + random.uniform(-0.02, 0.02)
     lng = 83.21 + random.uniform(-0.02, 0.02)
+
     return lat, lng
 
+# =========================================================
+# THREAT LEVEL LOGIC
+# =========================================================
 
-# ---------------- CAPTION ANALYSIS ----------------
+def determine_threat(labels):
 
-def analyze_caption(caption):
+    labels = [l.lower() for l in labels]
 
-    caption = caption.lower()
+    if "poacher" in labels:
+        return "HIGH"
 
-    weapon_words = ["rifle","gun","pistol","shotgun","weapon","firearm"]
-    ranger_words = ["ranger","forest officer","park ranger"]
-    animal_words = ["deer","elephant","rhino","tiger","lion","animal"]
+    if "weapon" in labels:
+        return "MEDIUM"
 
-    return {
-        "weapon": any(w in caption for w in weapon_words),
-        "ranger": any(w in caption for w in ranger_words),
-        "animal": any(w in caption for w in animal_words)
-    }
+    return "LOW"
 
-
-# ---------------- DETECT API ----------------
+# =========================================================
+# DETECT API
+# =========================================================
 
 @router.post("/detect")
 async def detect(
@@ -72,209 +128,215 @@ async def detect(
     db: Session = Depends(get_db)
 ):
 
-    contents = await file.read()
+    try:
 
-    np_img = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+        # =================================================
+        # READ IMAGE
+        # =================================================
 
-    if img is None:
-        return {"error": "Invalid image"}
+        contents = await file.read()
 
-    img = cv2.convertScaleAbs(img, alpha=1.2, beta=10)
+        np_img = np.frombuffer(contents, np.uint8)
 
-    detections = []
+        img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
-    # ---------------- YOLO DETECTION ----------------
+        if img is None:
+            return {"error": "Invalid image"}
 
-    result = get_sliced_prediction(
-        img,
-        detection_model,
-        slice_height=640,
-        slice_width=640,
-        overlap_height_ratio=0.15,
-        overlap_width_ratio=0.15
-    )
+        # =================================================
+        # YOLO INFERENCE
+        # =================================================
 
-    height, width = img.shape[:2]
+        results = model.predict(
+            source=img,
+            conf=0.50,
+            verbose=False
+        )
 
-    for obj in result.object_prediction_list:
+        detections = []
 
-        label = obj.category.name
-        confidence = obj.score.value
+        # =================================================
+        # PROCESS RESULTS
+        # =================================================
 
-        x1, y1, x2, y2 = map(int, obj.bbox.to_xyxy())
+        for r in results:
 
-        x1 = max(0,x1)
-        y1 = max(0,y1)
-        x2 = min(width,x2)
-        y2 = min(height,y2)
+            boxes = r.boxes
 
-        crop = img[y1:y2,x1:x2]
+            for box in boxes:
 
-        if crop.size == 0:
-            continue
+                class_id = int(box.cls[0])
 
-        if label == "person":
-            refined_label, refined_conf = classify_person(crop)
-        else:
-            refined_label = label
-            refined_conf = confidence
+                confidence = float(box.conf[0])
 
-        if refined_conf >= 0.55:
+                label = model.names[class_id]
 
-            detections.append({
-                "label": refined_label,
-                "confidence": float(refined_conf)
-            })
+                detections.append({
+                    "label": label,
+                    "confidence": round(confidence, 4)
+                })
 
-    caption = understand_scene(img)
+        # =================================================
+        # REMOVE DUPLICATES
+        # =================================================
 
-    context = analyze_caption(caption)
+        unique_detections = []
 
-    labels = [d["label"] for d in detections]
+        seen = set()
 
-    # ---------------- HUMAN FALLBACK (BLIP) ----------------
+        for d in detections:
 
-    human_words = ["man", "person", "people", "hunter", "human"]
+            key = (d["label"], round(d["confidence"], 2))
 
-# If YOLO didn't detect any human-like label
-    if not any(d["label"] in ["person", "poacher", "ranger"] for d in detections):
+            if key not in seen:
 
-        if any(word in caption.lower() for word in human_words):
+                seen.add(key)
 
-            detections.append({
-            "label": "poacher",
-            "confidence": 0.60
-            })
+                unique_detections.append(d)
 
-    if context["weapon"] and "weapon" not in labels:
-        detections.append({"label":"weapon","confidence":0.65})
+        detections = unique_detections
 
-    if context["animal"] and "animal" not in labels:
-        detections.append({"label":"animal","confidence":0.65})
+        # =================================================
+        # THREAT LEVEL
+        # =================================================
 
-    humans = [d for d in detections if d["label"] in ["person","poacher","ranger"]]
+        labels = [d["label"] for d in detections]
 
-    if humans:
+        threat = determine_threat(labels)
 
-        if context["ranger"] and "weapon" not in labels:
+        # =================================================
+        # GPS
+        # =================================================
 
-            for h in humans:
-                h["label"] = "ranger"
+        latitude, longitude = generate_location()
 
-        else:
+        # =================================================
+        # STORE INCIDENT
+        # =================================================
 
-            for h in humans:
-                h["label"] = "poacher"
+        incident = Incident(
+            camera_id=1,
+            threat_level=threat,
+            latitude=latitude,
+            longitude=longitude
+        )
 
-    labels = [d["label"] for d in detections]
+        db.add(incident)
 
-    # ---------------- THREAT LOGIC ----------------
+        db.commit()
 
-    threat = "LOW"
+        db.refresh(incident)
 
-    if "poacher" in labels:
-        threat = "HIGH"
+        # =================================================
+        # STORE DETECTIONS
+        # =================================================
 
-    elif "weapon" in labels:
-        threat = "MEDIUM"
+        for d in detections:
 
-    # ---------------- GPS ----------------
-
-    latitude, longitude = generate_location()
-
-    # ---------------- STORE INCIDENT ----------------
-
-    incident = Incident(
-        camera_id=1,
-        threat_level=threat,
-        latitude=latitude,
-        longitude=longitude
-    )
-
-    db.add(incident)
-    db.commit()
-    db.refresh(incident)
-
-    for d in detections:
-
-        db.add(
-            IncidentDetection(
+            detection_entry = IncidentDetection(
                 incident_id=incident.id,
                 label=d["label"],
                 confidence=d["confidence"]
             )
-        )
 
-    db.commit()
+            db.add(detection_entry)
 
-    # ---------------- EMAIL ALERT ----------------
+        db.commit()
 
-    if threat == "HIGH":
-        
-        # Save image temporarily for the PDF report
-        temp_img_path = f"temp_evidence_{incident.id}.jpg"
-        cv2.imwrite(temp_img_path, img)
-        
-        # Prepare data for report
-        detection_date = datetime.now().strftime("%Y-%m-%d")
-        detection_time = datetime.now().strftime("%H:%M:%S")
-        
-        # Find max confidence
-        max_conf = 0.0
-        if detections:
-            max_conf = max(d["confidence"] for d in detections)
-            
-        pdf_report_path = generate_evidence_pdf(
-            incident_id=incident.id,
-            detection_date=detection_date,
-            detection_time=detection_time,
-            threat_level=threat,
-            labels=labels,
-            max_confidence=max_conf,
-            latitude=latitude,
-            longitude=longitude,
-            image_path=temp_img_path
-        )
+        # =================================================
+        # SEND ALERT EMAIL
+        # =================================================
 
-        users = db.query(User).all()
+        if threat == "HIGH":
 
-        for user in users:
+            temp_img_path = f"temp_evidence_{incident.id}.jpg"
 
-            send_alert_email(
-                to_email=user.email,
-                subject="🚨 Poaching Alert",
-                body=f"""
+            cv2.imwrite(temp_img_path, img)
+
+            detection_date = datetime.now().strftime("%Y-%m-%d")
+
+            detection_time = datetime.now().strftime("%H:%M:%S")
+
+            max_conf = 0.0
+
+            if detections:
+                max_conf = max(
+                    d["confidence"] for d in detections
+                )
+
+            pdf_report_path = generate_evidence_pdf(
+                incident_id=incident.id,
+                detection_date=detection_date,
+                detection_time=detection_time,
+                threat_level=threat,
+                labels=labels,
+                max_confidence=max_conf,
+                latitude=latitude,
+                longitude=longitude,
+                image_path=temp_img_path
+            )
+
+            users = db.query(User).all()
+
+            for user in users:
+
+                send_alert_email(
+                    to_email=user.email,
+                    subject="🚨 Poaching Alert",
+                    body=f"""
 High Threat Detected
 
 Incident ID: {incident.id}
+
+Threat Level: {threat}
 
 Location:
 Latitude: {latitude}
 Longitude: {longitude}
 
-Detected:
+Detected Objects:
 {labels}
 """,
-                attachments=[temp_img_path, pdf_report_path]
-            )
-            
-        # Cleanup temporary files
-        if os.path.exists(temp_img_path):
-            os.remove(temp_img_path)
-        if os.path.exists(pdf_report_path):
-            os.remove(pdf_report_path)
+                    attachments=[
+                        temp_img_path,
+                        pdf_report_path
+                    ]
+                )
 
-    return {
-        "incident_id": incident.id,
-        "detections": detections,
-        "threat_level": threat,
-        "latitude": latitude,
-        "longitude": longitude
-    }
+            # =============================================
+            # CLEANUP
+            # =============================================
 
+            if os.path.exists(temp_img_path):
+                os.remove(temp_img_path)
 
-# ---------------- INCIDENT HISTORY ----------------
+            if os.path.exists(pdf_report_path):
+                os.remove(pdf_report_path)
+
+        # =================================================
+        # RESPONSE
+        # =================================================
+
+        return {
+            "success": True,
+            "incident_id": incident.id,
+            "threat_level": threat,
+            "detections": detections,
+            "total_detections": len(detections),
+            "latitude": latitude,
+            "longitude": longitude
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# =========================================================
+# INCIDENT HISTORY
+# =========================================================
 
 @router.get("/incidents")
 def get_incidents(
@@ -282,7 +344,9 @@ def get_incidents(
     db: Session = Depends(get_db)
 ):
 
-    incidents = db.query(Incident).order_by(Incident.id.desc()).all()
+    incidents = db.query(Incident).order_by(
+        Incident.id.desc()
+    ).all()
 
     return [
         {
@@ -291,7 +355,9 @@ def get_incidents(
             "threat_level": i.threat_level,
             "latitude": i.latitude,
             "longitude": i.longitude,
-            "created_at": i.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            "created_at": i.created_at.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
         }
         for i in incidents
     ]

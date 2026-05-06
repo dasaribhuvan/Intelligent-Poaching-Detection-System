@@ -1,12 +1,25 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import API from "../services/api";
-import { UploadCloud, Loader2, MapPin } from "lucide-react";
+import {
+  UploadCloud,
+  Loader2,
+  MapPin,
+  RotateCcw
+} from "lucide-react";
+
 import { motion } from "framer-motion";
 
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup
+} from "react-leaflet";
+
 import "leaflet/dist/leaflet.css";
 
 import L from "leaflet";
+
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
 
@@ -26,31 +39,94 @@ const UploadPage = () => {
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
 
+  // =================================================
+  // LOAD SAVED DETECTION DATA
+  // =================================================
+
+  useEffect(() => {
+
+    const savedData = localStorage.getItem("lastDetection");
+
+    if (savedData) {
+
+      const parsed = JSON.parse(savedData);
+
+      setPreview(parsed.preview);
+      setDetections(parsed.detections || []);
+      setThreat(parsed.threat);
+      setLocation(parsed.location);
+
+    }
+
+  }, []);
+
+  // =================================================
+  // RESET FUNCTION
+  // =================================================
+
+  const handleReset = () => {
+
+    setPreview(null);
+
+    setDetections([]);
+
+    setThreat(null);
+
+    setLocation(null);
+
+    localStorage.removeItem("lastDetection");
+
+  };
+
+  // =================================================
+  // HANDLE UPLOAD
+  // =================================================
+
   const handleUpload = async (file) => {
 
     if (!file) return;
 
-    setPreview(URL.createObjectURL(file));
+    const previewUrl = URL.createObjectURL(file);
+
+    setPreview(previewUrl);
+
     setLoading(true);
 
     const formData = new FormData();
+
     formData.append("file", file);
 
     try {
 
       const response = await API.post("/detect", formData);
 
-      setDetections(response.data.detections || []);
-      setThreat(response.data.threat_level);
+      const detectionData = {
+        preview: previewUrl,
+        detections: response.data.detections || [],
+        threat: response.data.threat_level,
+        location: {
+          lat: response.data.latitude,
+          lng: response.data.longitude
+        }
+      };
 
-      setLocation({
-        lat: response.data.latitude,
-        lng: response.data.longitude
-      });
+      setDetections(detectionData.detections);
+
+      setThreat(detectionData.threat);
+
+      setLocation(detectionData.location);
+
+      // SAVE TO LOCAL STORAGE
+
+      localStorage.setItem(
+        "lastDetection",
+        JSON.stringify(detectionData)
+      );
 
     } catch (error) {
 
       console.error(error);
+
       alert("Detection failed");
 
     }
@@ -67,12 +143,35 @@ const UploadPage = () => {
       <motion.div
         initial={{opacity:0,y:-10}}
         animate={{opacity:1,y:0}}
-        className="flex items-center gap-3"
+        className="flex items-center justify-between"
       >
-        <UploadCloud className="text-emerald-400"/>
-        <h1 className="text-2xl font-semibold">
-          AI Threat Detection Upload
-        </h1>
+
+        <div className="flex items-center gap-3">
+
+          <UploadCloud className="text-emerald-400"/>
+
+          <h1 className="text-2xl font-semibold">
+            AI Threat Detection Upload
+          </h1>
+
+        </div>
+
+        {/* RESET BUTTON */}
+
+        <button
+          onClick={handleReset}
+          className="flex items-center gap-2
+          bg-red-500/10 hover:bg-red-500/20
+          text-red-400 px-4 py-2 rounded-lg
+          border border-red-500/20 transition-all"
+        >
+
+          <RotateCcw size={16}/>
+
+          Reset
+
+        </button>
+
       </motion.div>
 
 
@@ -81,7 +180,7 @@ const UploadPage = () => {
 
       <div className="grid grid-cols-2 gap-6">
 
-        {/* COOL UPLOAD PANEL */}
+        {/* UPLOAD PANEL */}
 
         <motion.label
           initial={{opacity:0,y:15}}
@@ -94,7 +193,9 @@ const UploadPage = () => {
           onDrop={(e)=>{
             e.preventDefault();
             setDragging(false);
+
             const file = e.dataTransfer.files[0];
+
             handleUpload(file);
           }}
           className={`relative flex flex-col items-center justify-center
@@ -275,7 +376,11 @@ const UploadPage = () => {
             <MapContainer
               center={[location.lat, location.lng]}
               zoom={13}
-              style={{ height:"260px", width:"100%", borderRadius:"10px"}}
+              style={{
+                height:"260px",
+                width:"100%",
+                borderRadius:"10px"
+              }}
             >
 
               <TileLayer

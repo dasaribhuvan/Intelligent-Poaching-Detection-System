@@ -1,10 +1,24 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-DATABASE_URL = "postgresql://postgres:PASSWORD@localhost:5432/wildlife_db"
+from dotenv import load_dotenv
+import os
 
+# Load .env file
+load_dotenv()
+
+# Read database URL from environment
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Create engine
 engine = create_engine(DATABASE_URL)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Session
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
 
+# Base model
 Base = declarative_base()

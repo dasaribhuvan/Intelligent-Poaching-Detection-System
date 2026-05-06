@@ -12,22 +12,33 @@ const Login = () => {
   const [password, setPassword] = useState("");
 
   const handleLogin = async (e) => {
-    e.preventDefault();
+  e.preventDefault();
 
-    try {
-      const response = await API.post("/auth/login", {
-        email: officerId,
-        password: password,
-      });
+  try {
 
-      localStorage.setItem("token", response.data.access_token);
+    const response = await API.post("/auth/login", {
+      email: officerId,
+      password: password,
+    });
 
-      toast.success("Login Successful");
-      navigate("/dashboard");
-    } catch (error) {
-      toast.error("Invalid Credentials ❌");
-    }
-  };
+    // Save JWT token
+    localStorage.setItem(
+      "token",
+      response.data.access_token
+    );
+
+    toast.success("Login Successful");
+
+    // Force refresh + redirect
+    window.location.href = "/dashboard";
+
+  } catch (error) {
+
+    console.error(error);
+
+    toast.error("Invalid Credentials ❌");
+  }
+};
 
   return (
     <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-emerald-950 to-slate-900 overflow-hidden">

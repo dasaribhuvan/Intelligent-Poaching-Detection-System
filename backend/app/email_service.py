@@ -5,8 +5,8 @@ import os
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
-SENDER_EMAIL = "wildlife.alerts7569@gmail.com"
-SENDER_PASSWORD = "sssljrgpvcrjunuk"
+SENDER_EMAIL = os.getenv("EMAIL_USER")
+SENDER_PASSWORD = os.getenv("EMAIL_PASS")
 
 
 def send_alert_email(to_email: str, subject: str, body: str, attachments: list = None):

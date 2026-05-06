@@ -11,10 +11,13 @@ import DashboardLayout from "./components/Dashboard/DashboardLayout";
 
 import { Toaster } from "react-hot-toast";
 
-
 function App() {
 
-  const isAuthenticated = !!localStorage.getItem("token");
+  // Check token from localStorage
+  const token = localStorage.getItem("token");
+
+  // Authentication status
+  const isAuthenticated = token !== null;
 
   return (
 
@@ -37,17 +40,36 @@ function App() {
 
       <Routes>
 
-        {/* Public Routes */}
+        {/* ================================================= */}
+        {/* PUBLIC ROUTES */}
+        {/* ================================================= */}
 
-        <Route path="/" element={<Landing />} />
+        <Route
+          path="/"
+          element={<Landing />}
+        />
 
-        <Route path="/login" element={<Login />} />
+        <Route
+          path="/login"
+          element={
+            isAuthenticated
+              ? <Navigate to="/dashboard" />
+              : <Login />
+          }
+        />
 
-        <Route path="/signup" element={<Signup />} />
+        <Route
+          path="/signup"
+          element={
+            isAuthenticated
+              ? <Navigate to="/dashboard" />
+              : <Signup />
+          }
+        />
 
-
-
-        {/* Protected Dashboard */}
+        {/* ================================================= */}
+        {/* DASHBOARD */}
+        {/* ================================================= */}
 
         <Route
           path="/dashboard"
@@ -62,8 +84,9 @@ function App() {
           }
         />
 
-
-        {/* Upload Detection */}
+        {/* ================================================= */}
+        {/* UPLOAD PAGE */}
+        {/* ================================================= */}
 
         <Route
           path="/upload"
@@ -78,8 +101,9 @@ function App() {
           }
         />
 
-
-        {/* Alerts */}
+        {/* ================================================= */}
+        {/* ALERTS PAGE */}
+        {/* ================================================= */}
 
         <Route
           path="/alerts"
@@ -94,17 +118,20 @@ function App() {
           }
         />
 
+        {/* ================================================= */}
+        {/* INVALID ROUTES */}
+        {/* ================================================= */}
 
-        {/* Catch All */}
-
-        <Route path="*" element={<Navigate to="/" />} />
+        <Route
+          path="*"
+          element={<Navigate to="/" />}
+        />
 
       </Routes>
 
     </Router>
 
   );
-
 }
 
 export default App;
